@@ -5,7 +5,7 @@
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, height=device-height, user-scalable=0"/>
 
-    <title>TeamCAMS Client (Operator's interface)</title>
+    <title>TeamCAMS Operator Interface</title>
     <style>
       html, body { padding: 0; margin: 0; overflow: hidden; height: 100% }
       #screen { width: 100%; height: 100%; }
@@ -224,7 +224,7 @@
   <body onload="init()">
     <figure style="overflow:visible;" id="qtspinner">
       <center style="margin-top:1.5em; line-height:150%">
-        <strong>TeamCAMS Client (Operator's interface)</strong>
+        <strong>TeamCAMS Operator Interface</strong>
         <div id="qtstatus"></div>
         <noscript>JavaScript is disabled. Please enable JavaScript to use this application.</noscript>
       </center>
@@ -261,7 +261,7 @@
                                 exitData.text !== undefined ? ` (${exitData.text})` : '';
                             showUi(spinner);
                         },
-                        entryFunction: window.teamcamsclient_entry,
+                        entryFunction: window.TeamCAMSOperatorInterface_entry,
                         containerElements: [screen],
                         
                     }
@@ -272,7 +272,7 @@
             }
         }
     </script>
-    <script src="teamcamsclient.js"></script>
+    <script src="TeamCAMSOperatorInterface.js"></script>
     <script type="text/javascript" src="qtloader.js"></script>
   </body>
 </html>
