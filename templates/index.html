@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, user-scalable=0"/>
+
+    <title>TeamCAMS Client (Operator's interface)</title>
+    <style>
+      html, body { padding: 0; margin: 0; overflow: hidden; height: 100% }
+      #screen { width: 100%; height: 100%; }
+    </style>
+
+    <script>
+        window.dataConnection = null;
+        window.proxySocket = null;
+        const channel = new MessageChannel();
+
+        // ======================================================
+        // WASM communication helpers
+        // ======================================================
+
+        function sendToWasm(message) {
+            if (!window.proxySocket ||
+                typeof window.proxySocket.onmessage !== "function")
+                return;
+
+            try {
+                window.proxySocket.onmessage({
+                    data: JSON.stringify(message)
+                });
+            } catch (e) {
+                console.error("Failed to send message to WASM:", e);
+            }
+        }
+
+        // ======================================================
+        // Popup management
+        // ======================================================
+
+        let popupOverlay = null;
+        let popupFrame = null;
+
+        function closePopup() {
+            if (popupOverlay) {
+                popupOverlay.remove();
+                popupOverlay = null;
+                popupFrame = null;
+                sendToWasm({
+                        type: "popup_close"
+                });
+            }
+        }
+
+        function showPopup(url, popupTitle) {
+            closePopup();
+
+            popupOverlay = document.createElement("div");
+            popupOverlay.style.position = "fixed";
+            popupOverlay.style.left = "0";
+            popupOverlay.style.top = "0";
+            popupOverlay.style.width = "100%";
+            popupOverlay.style.height = "100%";
+            popupOverlay.style.background = "rgba(0,0,0,0.5)";
+            popupOverlay.style.zIndex = "99999";
+            popupOverlay.style.display = "flex";
+            popupOverlay.style.alignItems = "center";
+            popupOverlay.style.justifyContent = "center";
+
+            const container = document.createElement("div");
+            container.style.width = "90%";
+            container.style.height = "90%";
+            container.style.background = "white";
+            container.style.display = "flex";
+            container.style.flexDirection = "column";
+            container.style.borderRadius = "8px";
+            container.style.overflow = "hidden";
+
+            const toolbar = document.createElement("div");
+            toolbar.style.height = "40px";
+            toolbar.style.background = "#2e2e2e";
+            toolbar.style.color = "white";
+            toolbar.style.display = "flex";
+            toolbar.style.alignItems = "center";
+            toolbar.style.justifyContent = "space-between";
+            toolbar.style.padding = "0 10px";
+
+            const title = document.createElement("span");
+            title.textContent = popupTitle;
+
+            const closeButton = document.createElement("button");
+            closeButton.textContent = "✕";
+            closeButton.style.cursor = "pointer";
+            closeButton.onclick = closePopup;
+
+            toolbar.appendChild(title);
+            toolbar.appendChild(closeButton);
+
+            popupFrame = document.createElement("iframe");
+            popupFrame.credentialless = true; 
+            const absoluteProxyUrl = window.location.origin + '/proxy.php?url=' + encodeURIComponent(url);
+            popupFrame.src = "/pdfjs/web/viewermin.html?file=" + encodeURIComponent(absoluteProxyUrl);
+            popupFrame.style.flex = "1";
+            popupFrame.style.border = "0";
+
+            container.appendChild(toolbar);
+            container.appendChild(popupFrame);
+
+            popupOverlay.appendChild(container);
+
+            document.body.appendChild(popupOverlay);
+        }
+
+        // This is used to support iframe to wams communication
+        // If the iframe does window.parent.postMessage({ action: "confirm", id: 123 });
+        // we can get {"type": "popup_event", "data": { "action": "confim*", "id": 123 } }) on the
+        // wasm side
+        window.addEventListener("message", function(event) {
+            // TODO: validate event.origin
+            sendToWasm({
+                type: "popup_event",
+                data: event.data
+            });
+        });
+
+        // Server -> QML
+        channel.port2.onmessage = function(event) {
+            if (window.proxySocket && typeof window.proxySocket.onmessage === "function") {
+                try {
+                    window.proxySocket.onmessage({
+                        data: event.data
+                    });
+                } catch (e) {
+                    console.error("Proxy HTML (RX Thread): QML engine transient collision, skipped safely:", e);
+                }
+            }
+        };
+
+        const NativeWebSocket = window.WebSocket || globalThis.WebSocket;
+
+        const ProxyWebSocket = function(url, protocols) {
+                // Intercept traffic to "bogus" address localhost:8143
+                if (url.toLowerCase().includes("localhost:8143")) {
+                    const proxySocket = {
+                        url: url,
+                        readyState: 0,
+
+                        // Handle traffic from QML client to the manager
+                        send: function(data) {
+                            try {
+                                const parsed = JSON.parse(data);
+                                const commandHandlers = {
+                                    play_sound(message) {
+                                        if (!message.key)
+                                            return true;
+                                        try {
+                                            const audio = new Audio("sounds/" + message.key);
+                                            audio.play().catch(err => {
+                                                    console.warn("Failed to play audio:", err);
+                                                    });
+                                            }
+                                            catch (err) {
+                                                console.error("failed to play audio:", err);
+                                            }
+
+                                            return true;
+                                        },
+                                        show_popup(message) {
+                                            if (!message.key)
+                                                return true;
+                                            if (!message.payload)
+                                                return true;
+                                            if (!message.payload.title)
+                                                return true;                                                
+                                            showPopup(message.key, message.payload.title);
+                                            return true;
+                                        }
+                                    }
+                                    const handler = commandHandlers[parsed.type];
+                                    if (handler) {
+                                        const handled = handler(parsed);
+                                        if (handled) {
+                                            return;
+                                        }
+                                    }
+                                }
+                                catch (err) {
+                                    console.error("failed to handle command: "+data, err);
+                                }
+
+                                setTimeout(() => {
+                                    if (window.dataConnection && window.dataConnection.open) {
+                                        try {
+                                            window.dataConnection.send(JSON.parse(data));
+                                        } catch (e) {
+                                            window.dataConnection.send(data);
+                                        }
+                                    }
+                                }, 1);
+                            },
+                        };
+
+                        window.proxySocket = proxySocket;
+
+                        setTimeout(() => {
+                            proxySocket.readyState = 1;
+                            if (typeof proxySocket.onopen === "function") proxySocket.onopen();
+                        }, 50);
+
+                        return proxySocket;
+                    }
+
+                    return new NativeWebSocket(url, protocols);
+                };
+
+                window.WebSocket = ProxyWebSocket;
+                if (typeof globalThis !== "undefined") {
+                    globalThis.WebSocket = ProxyWebSocket;
+                }
+    </script>
+
+
+  </head>
+  <body onload="init()">
+    <figure style="overflow:visible;" id="qtspinner">
+      <center style="margin-top:1.5em; line-height:150%">
+        <strong>TeamCAMS Client (Operator's interface)</strong>
+        <div id="qtstatus"></div>
+        <noscript>JavaScript is disabled. Please enable JavaScript to use this application.</noscript>
+      </center>
+    </figure>
+    <div id="screen"></div>
+
+    <script type="text/javascript">
+        async function init()
+        {
+            const spinner = document.querySelector('#qtspinner');
+            const screen = document.querySelector('#screen');
+            const status = document.querySelector('#qtstatus');
+
+            const showUi = (ui) => {
+                [spinner, screen].forEach(element => element.style.display = 'none');
+                if (screen === ui)
+                    screen.style.position = 'default';
+                ui.style.display = 'block';
+            }
+
+            try {
+                showUi(spinner);
+                status.innerHTML = 'Loading...';
+
+                const instance = await qtLoad({
+                    qt: {
+                        onLoaded: () => showUi(screen),
+                        onExit: exitData =>
+                        {
+                            status.innerHTML = 'Application exit';
+                            status.innerHTML +=
+                                exitData.code !== undefined ? ` with code ${exitData.code}` : '';
+                            status.innerHTML +=
+                                exitData.text !== undefined ? ` (${exitData.text})` : '';
+                            showUi(spinner);
+                        },
+                        entryFunction: window.teamcamsclient_entry,
+                        containerElements: [screen],
+                        
+                    }
+                });
+            } catch (e) {
+                console.error(e);
+                console.error(e.stack);
+            }
+        }
+    </script>
+    <script src="teamcamsclient.js"></script>
+    <script type="text/javascript" src="qtloader.js"></script>
+  </body>
+</html>
